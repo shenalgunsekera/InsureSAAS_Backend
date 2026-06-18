@@ -1,0 +1,22 @@
+﻿{
+  "name": "insuresaas-backend",
+  "version": "2.0.0",
+  "description": "InsureSAAS - Backend (WhatsApp proxy)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
