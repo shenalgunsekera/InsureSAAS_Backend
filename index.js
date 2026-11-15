@@ -48,7 +48,7 @@ async function requireAuth(req, res, next) {
   try {
     const snap = await admin.firestore().doc(`users/${req.user.uid}`).get();
     const role = snap.exists ? snap.get('role') : null;
-    if (!['admin', 'manager', 'employee'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
+    if (!['admin', 'manager', 'employee'].includes(role) || snap.get('disabled')) return res.status(403).json({ error: 'Not allowed' });
   } catch {
     return res.status(503).json({ error: 'Auth check failed' });
   }
@@ -67,6 +67,32 @@ function rateLimit(max, windowMs) {
     rec.count++; next();
   };
 }
+
+/* ── Admin-only guard (role re-read from Firestore, never trusted from the client) ── */
+async function requireAdmin(req, res, next) {
+  try {
+    const snap = await admin.firestore().doc(`users/${req.user.uid}`).get();
+    if (!snap.exists || snap.get('role') !== 'admin' || snap.get('disabled')) return res.status(403).json({ error: 'Administrator only' });
+  } catch { return res.status(503).json({ error: 'Auth check failed' }); }
+  next();
+}
+
+/* ── D009 offboarding: disable the Firebase Auth account and revoke every session ── */
+app.post('/admin/disable-user', requireAuth, requireAdmin, rateLimit(30, 60 * 1000), async (req, res) => {
+  const uid = String(req.body?.uid || '');
+  if (!uid || uid === req.user.uid) return res.status(400).json({ error: 'Invalid user' });
+  try {
+    await admin.auth().updateUser(uid, { disabled: true });
+    await admin.auth().revokeRefreshTokens(uid);
+    await admin.firestore().doc(`users/${uid}`).set({ disabled: true, auth_disabled_at: new Date().toISOString(), auth_disabled_by: req.user.uid }, { merge: true });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/admin/enable-user', requireAuth, requireAdmin, rateLimit(30, 60 * 1000), async (req, res) => {
+  const uid = String(req.body?.uid || '');
+  if (!uid) return res.status(400).json({ error: 'Invalid user' });
+  try { await admin.auth().updateUser(uid, { disabled: false }); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 /* ── health ──────────────────────────────────────────────────────────── */
 app.get('/health', (_, res) => res.json({ status: 'OK', service: 'InsureSAAS Backend', ts: new Date().toISOString() }));
