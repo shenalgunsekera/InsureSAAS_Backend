@@ -28,6 +28,8 @@ app.use(cors({
     cb(new Error('Not allowed by CORS'));
   }
 }));
+// D022: WhatsApp webhook needs the raw body for signature checks — before express.json
+require('./whatsappInbound').mountWhatsAppWebhook(app, admin);
 app.use(express.json({ limit: '64kb' })); // cap body size (anti-DoS)
 
 /* ── Require a verified Firebase ID token ──────────────────────────────────
