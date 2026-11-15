@@ -1,7 +1,7 @@
 {
   "name": "insuresaas-backend",
   "version": "2.0.0",
-  "description": "InsureSAAS - Backend (WhatsApp proxy)",
+  "description": "InsureSAAS - Backend (WhatsApp, email, document reader, scheduler, admin)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -12,10 +12,12 @@
   },
   "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "firebase-admin": "^12.6.0"
+    "firebase-admin": "^12.6.0",
+    "nodemailer": "^10.5.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

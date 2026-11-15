@@ -157,6 +157,9 @@ app.post('/send-whatsapp', requireAuth, rateLimit(60, 60 * 1000), async (req, re
   }
 });
 
+/* ── v2 integrations: document reader, email, scheduler ─────────────── */
+require('./integrations').mount(app, { requireAuth, rateLimit, admin });
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`InsureSAAS backend running on port ${PORT}`);
