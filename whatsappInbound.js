@@ -27,6 +27,7 @@ async function graph(path) {
 async function mediaBase64(id) {
   const meta = await (await graph(id)).json();
   const r = await fetch(meta.url, { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` } });
+  if (!r.ok) throw new Error(`Attachment download failed (HTTP ${r.status})`);
   const buf = Buffer.from(await r.arrayBuffer());
   if (buf.length > 15 * 1024 * 1024) throw new Error('Attachment larger than 15 MB');
   return { base64: buf.toString('base64'), media_type: meta.mime_type };
@@ -38,7 +39,8 @@ async function handleMessage(db, admin, msg, contactName) {
   const text = msg.text?.body || msg.document?.caption || msg.image?.caption || '';
   const inbox = { from, from_name: contactName || '', at, wa_id: msg.id, text, media: msg.document || msg.image ? { id: (msg.document || msg.image).id, name: msg.document?.filename || 'image', mime: (msg.document || msg.image).mime_type } : null, status: 'Needs review', reason: '' };
   const idemp = db.doc(`whatsapp_inbox/${msg.id}`);
-  if ((await idemp.get()).exists) return; // Meta retries deliveries — process each message once
+  // Meta retries deliveries (sometimes concurrently) — claim the message id atomically, process once
+  try { await idemp.create({ ...inbox, status: 'Processing' }); } catch (e) { if (e.code === 6 || /already exists/i.test(e.message)) return; throw e; }
   // 1. approved insurer contact
   const contacts = (await db.collection('insurance_companies').get()).docs.filter(d => digits(d.get('whatsapp')) === from);
   if (!contacts.length) { await idemp.set({ ...inbox, reason: 'Sender is not an approved insurer WhatsApp contact' }); return; }
@@ -57,6 +59,11 @@ async function handleMessage(db, admin, msg, contactName) {
   const val = (k) => (terms?.fields || []).find(f => f.key === k) || {};
   const ref = String(val('quote_reference').value || '').trim().toUpperCase();
   let target = open.filter(d => ref && String(d.get('reference') || '').toUpperCase() === ref);
+  // The reference is often only in the message or caption, not in the attached quotation
+  if (!target.length) {
+    const said = text.toUpperCase();
+    target = open.filter(d => { const r = String(d.get('reference') || '').toUpperCase(); return r && new RegExp(`(^|[^A-Z0-9])${r.replace(/[^A-Z0-9]/g, m => `\\${m}`)}([^A-Z0-9]|$)`).test(said); });
+  }
   if (!target.length && open.length === 1) target = open;
   inbox.company_name = companyName; inbox.candidates = open.map(d => d.id); inbox.terms = terms ? terms.fields : null;
   if (target.length !== 1) { await idemp.set({ ...inbox, reason: open.length ? `Matches ${open.length} open requests — choose the request` : 'No open request for this insurer' }); return; }
@@ -108,10 +115,14 @@ function mountWhatsAppWebhook(app, admin) {
       for (const entry of body.entry || []) for (const ch of entry.changes || []) {
         const v = ch.value || {};
         const names = Object.fromEntries((v.contacts || []).map(c => [c.wa_id, c.profile?.name]));
-        for (const m of v.messages || []) await handleMessage(db, admin, m, names[m.from]).catch(e => console.error('WhatsApp message failed:', e.message));
+        for (const m of v.messages || []) await handleMessage(db, admin, m, names[m.from]).catch(async (e) => {
+          console.error('WhatsApp message failed:', e.message);
+          // never leave a claimed message hidden in 'Processing'
+          if (m.id) await db.doc(`whatsapp_inbox/${m.id}`).set({ status: 'Needs review', reason: `Could not process automatically: ${e.message}` }, { merge: true }).catch(() => {});
+        });
       }
     } catch (e) { console.error('WhatsApp webhook error:', e.message); }
   });
 }
 
-module.exports = { mountWhatsAppWebhook, digits };
+module.exports = { mountWhatsAppWebhook, digits, handleMessage };

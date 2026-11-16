@@ -135,7 +135,8 @@ ${fields.map(f => `- ${f.key}: ${f.label}${f.hint ? ` (${f.hint})` : ''}`).join(
 List contradictions in conflicts.` }],
   });
   if (response.stop_reason !== 'end_turn') throw Object.assign(new Error('The message could not be read automatically.'), { status: 422 });
-  const parsed = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+  let parsed;
+  try { parsed = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join('')); } catch { throw Object.assign(new Error('The reader returned an unreadable result.'), { status: 502 }); }
   const byKey = new Map(parsed.fields.map(f => [f.key, f]));
   return { document_kind: parsed.document_kind, fields: keys.map(k => byKey.get(k) || { key: k, value: '', confidence: 'not_found', source_text: '', note: '' }), conflicts: parsed.conflicts || [], model: response.model };
 }
@@ -145,7 +146,8 @@ async function sendEmail({ to, subject, text, attachments = [] }) {
   if (!t) throw Object.assign(new Error('Email is not configured on this server (SMTP_HOST)'), { status: 503 });
   const list = (Array.isArray(to) ? to : String(to || '').split(',')).map(s => s.trim()).filter(Boolean);
   if (!list.length || list.length > 50 || list.some(a => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a))) throw Object.assign(new Error('Invalid recipient'), { status: 400 });
-  const links = attachments.filter(a => a && a.url && ALLOWED_HOSTS.includes(new URL(a.url).hostname));
+  const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ''; } };
+  const links = (Array.isArray(attachments) ? attachments : []).filter(a => a && a.url && ALLOWED_HOSTS.includes(hostOf(a.url)));
   const body = String(text || '').slice(0, 50000) + (links.length ? `\n\nDocuments:\n${links.map(a => `${a.name}: ${a.url}`).join('\n')}` : '');
   const info = await t.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to: list.join(', '), subject: String(subject || '').slice(0, 300), text: body });
   return { id: info.messageId };
@@ -195,8 +197,9 @@ async function renewalNotices(db) {
     const c = p.renewal_case || {};
     if (c.not_renewed || c.replacement_policy_id || c.notices_opt_out || (p.status && p.status !== 'approved')) continue;
     const left = days(today, String(p.policy_period_to).slice(0, 10));
-    const offset = schedule.find(n => left <= n && !(c.notices || []).some(x => x.offset === n && x.status === 'Sent'));
-    if (offset === undefined) continue;
+    // Only the current window (same rule as the tracker): one notice when a policy enters late
+    const offset = [...schedule].reverse().find(n => left <= n);
+    if (offset === undefined || (c.notices || []).some(x => x.offset === offset && x.status === 'Sent')) continue;
     const channel = cfg.notice_channel || 'email';
     if (channel !== 'email' || !p.email) continue; // WhatsApp notices are sent from the tracker
     const body = String(cfg.notice_template || 'Dear {customer},\n\nYour {product} policy {policy_no} with {insurer} expires on {expiry} ({days} days).\n\nThis is a reminder only: your cover is not renewed until we confirm placement with the insurer.')
@@ -222,4 +225,4 @@ function mount(app, { requireAuth, rateLimit, admin }) {
   startScheduler(admin);
 }
 
-module.exports = { mount, extractDocument, sendEmail };
+module.exports = { mount, extractDocument, sendEmail, renewalNotices };
